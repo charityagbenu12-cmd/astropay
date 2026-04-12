@@ -124,6 +124,14 @@ npm run start
 npm run db:migrate
 ```
 
+### Rust backend validation
+
+```bash
+cd ../rust-backend
+cargo check
+cargo run --bin migrate
+```
+
 ## Route handler verification
 
 These are App Router API handlers, not legacy `pages/api` routes:
@@ -143,6 +151,7 @@ These are App Router API handlers, not legacy `pages/api` routes:
 
 - `npm run lint` depends on a local ESLint config file. This repo now includes one, but you should still expect a deprecation warning from `next lint` on Next.js 15 and plan to move to direct ESLint CLI usage before Next.js 16.
 - The runtime image still ships the full `node_modules` tree. That is acceptable for now but not lean.
+- The Rust backend is not feature-complete yet. Checkout XDR generation and the reconciliation/settlement cron flows still need a real Stellar port.
 - Settlement and cron flows depend on real Stellar and secret-bearing env configuration. A local page render is not the same thing as validating payment and settlement behavior.
 
 ## Recommended pre-deploy hardening

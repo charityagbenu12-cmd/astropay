@@ -31,3 +31,5 @@ out/
 **/.vercel/
 coverage/
 *.tsbuildinfo
+target/
+**/target/

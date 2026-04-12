@@ -2,6 +2,8 @@
 
 ASTROpay is a hosted USDC payment-link and invoicing product on Stellar.
 
+This repo now also contains a Rust backend under `../rust-backend` for the API migration away from Next.js route handlers. That migration is real but not complete yet: auth, sessions, invoice CRUD, webhook payment marking, and SQL migrations are implemented in Rust; Stellar checkout XDR generation and the cron settlement/reconciliation flows are not.
+
 This v2 upgrade replaces the fake-MVP shortcuts with real product foundations:
 - PostgreSQL-backed merchants, sessions, invoices, payouts, and audit events
 - merchant authentication
@@ -26,7 +28,8 @@ This is the only honest way to implement fee-splitting without lying to yourself
 ## Tech stack
 
 - Next.js App Router + TypeScript
-- Node runtime
+- Node runtime for the current frontend and legacy route handlers
+- Rust + Axum for the backend migration service in `../rust-backend`
 - PostgreSQL via `pg`
 - Stellar SDK + Horizon API
 - Freighter wallet for buyer signing
@@ -78,6 +81,41 @@ Tracks merchant settlement jobs and outcomes.
    ```bash
    npm run dev
    ```
+
+## Rust backend setup
+
+1. Copy the Rust backend env file:
+   ```bash
+   cd ../rust-backend
+   cp .env.example .env.local
+   ```
+2. Reuse the same Postgres database and core env vars as the Next app.
+3. Run the Rust migration runner:
+   ```bash
+   cargo run --bin migrate
+   ```
+4. Start the Rust API service:
+   ```bash
+   cargo run
+   ```
+
+Current Rust backend coverage:
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/invoices`
+- `POST /api/invoices`
+- `GET /api/invoices/:id`
+- `GET /api/invoices/:id/status`
+- `POST /api/webhooks/stellar`
+
+Current Rust backend gaps:
+- `POST /api/invoices/:id/checkout`
+- `GET /api/cron/reconcile`
+- `GET /api/cron/settle`
+
+Those still need a proper Stellar transaction port and currently return `501 Not Implemented` in the Rust service.
 
 ## Environment variables
 
