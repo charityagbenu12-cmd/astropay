@@ -1,0 +1,23 @@
+import { fail, ok } from '@/lib/http';
+import { env } from '@/lib/env';
+import { getInvoiceByPublicId, markInvoicePaid } from '@/lib/data';
+
+function authorized(request: Request) {
+  const auth = request.headers.get('authorization');
+  const bearer = auth?.replace('Bearer ', '');
+  return bearer && bearer === env.cronSecret;
+}
+
+export async function POST(request: Request) {
+  if (!authorized(request)) return fail('Unauthorized', 401);
+  const body = await request.json();
+  const publicId = String(body.publicId || '');
+  const transactionHash = String(body.transactionHash || '');
+  if (!publicId || !transactionHash) return fail('publicId and transactionHash are required');
+  const invoice = await getInvoiceByPublicId(publicId);
+  if (!invoice) return fail('Invoice not found', 404);
+  if (invoice.status === 'pending') {
+    await markInvoicePaid({ invoiceId: invoice.id, transactionHash, payload: body });
+  }
+  return ok({ received: true, invoiceId: invoice.id, status: invoice.status });
+}

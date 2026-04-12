@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "crons": [
+    { "path": "/api/cron/reconcile", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/settle", "schedule": "*/15 * * * *" }
+  ],
+  "functions": {
+    "app/api/cron/**/*.ts": { "maxDuration": 60 },
+    "app/api/invoices/[id]/checkout/route.ts": { "maxDuration": 60 }
+  }
+}
