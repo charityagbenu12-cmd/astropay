@@ -1,4 +1,6 @@
-use axum::{Json, extract::State};
+use std::net::SocketAddr;
+
+use axum::{Json, extract::{ConnectInfo, State}};
 use axum_extra::extract::{CookieJar as ExtractedCookieJar, cookie::CookieJar};
 use serde_json::json;
 
@@ -55,12 +57,19 @@ pub async fn register(
 
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     jar: ExtractedCookieJar,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(CookieJar, Json<serde_json::Value>), AppError> {
-    if payload.password.len() < 8 || !payload.email.contains('@') {
+    let email_key = payload.email.trim().to_lowercase();
+    if payload.password.len() < 8 || !email_key.contains('@') {
         return Err(AppError::bad_request("Invalid payload"));
     }
+
+    state
+        .login_limiter
+        .check_ip(&addr.ip().to_string())
+        .await?;
 
     let client = state.pool.get().await?;
     let row = client
@@ -68,18 +77,21 @@ pub async fn login(
             "SELECT id, email, business_name, stellar_public_key, settlement_public_key, created_at, password_hash
              FROM merchants
              WHERE email = $1",
-            &[&payload.email.to_lowercase()],
+            &[&email_key],
         )
         .await?;
     let Some(row) = row else {
-        return Err(AppError::unauthorized("Invalid credentials"));
+        state.login_limiter.record_email_failure(&email_key).await?;
+        return Err(AppError::unauthorized("Invalid credentials".to_string()));
     };
     let merchant = crate::models::Merchant::from_row(&row);
     let password_hash: String = row.get("password_hash");
     if !verify_password(&payload.password, &password_hash) {
-        return Err(AppError::unauthorized("Invalid credentials"));
+        state.login_limiter.record_email_failure(&email_key).await?;
+        return Err(AppError::unauthorized("Invalid credentials".to_string()));
     }
     let cookie = create_session(&client, &state.config, merchant.id).await?;
+    state.login_limiter.clear_email_failures(&email_key).await;
     Ok((
         jar.add(cookie),
         Json(json!({ "merchant": merchant.as_login() })),

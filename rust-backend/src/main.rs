@@ -3,8 +3,12 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod login_rate_limit;
 mod models;
 mod stellar;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -14,12 +18,13 @@ use deadpool_postgres::Pool;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{config::Config, db::create_pool};
+use crate::{config::Config, db::create_pool, login_rate_limit::LoginRateLimiter};
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
     pub pool: Pool,
+    pub login_limiter: Arc<LoginRateLimiter>,
 }
 
 #[tokio::main]
@@ -34,9 +39,11 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     let pool = create_pool(&config)?;
+    let login_limiter = LoginRateLimiter::from_config(&config);
     let state = AppState {
         config: config.clone(),
         pool,
+        login_limiter,
     };
 
     let app = Router::new()
@@ -69,7 +76,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("rust backend listening on {}", config.bind_addr);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

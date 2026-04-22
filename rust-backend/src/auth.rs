@@ -1,3 +1,4 @@
+use axum::http::{HeaderMap, header};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use chrono::{Duration, Utc};
 use deadpool_postgres::GenericClient;
@@ -10,6 +11,22 @@ use scrypt::{
 use uuid::Uuid;
 
 use crate::{config::Config, error::AppError, models::Merchant};
+
+/// Validates `Authorization: Bearer <token>` for cron and webhook routes.
+pub fn authorize_cron_request(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
+    if cron_secret.is_empty() {
+        return Err(AppError::unauthorized("Unauthorized".to_string()));
+    }
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if token == Some(cron_secret) {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized("Unauthorized".to_string()))
+    }
+}
 
 pub const SESSION_COOKIE: &str = "astropay_session";
 
@@ -130,8 +147,11 @@ fn session_cookie(config: &Config, token: String) -> Cookie<'static> {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::{HeaderMap, HeaderValue, header};
+
     use super::{
-        generate_memo, generate_public_id, hash_password, session_cookie, verify_password,
+        authorize_cron_request, generate_memo, generate_public_id, hash_password, session_cookie,
+        verify_password,
     };
     use crate::config::Config;
 
@@ -154,6 +174,10 @@ mod tests {
             invoice_expiry_hours: 24,
             cron_secret: "cron".to_string(),
             secure_cookies: false,
+            login_rate_ip_window_secs: 600,
+            login_rate_ip_max: 80,
+            login_rate_email_window_secs: 900,
+            login_rate_email_fail_max: 12,
         }
     }
 
@@ -180,5 +204,25 @@ mod tests {
         assert_eq!(cookie.name(), "astropay_session");
         assert_eq!(cookie.value(), "token");
         assert!(cookie.http_only().unwrap_or(false));
+    }
+
+    #[test]
+    fn authorize_cron_accepts_matching_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer mysecret"),
+        );
+        assert!(authorize_cron_request("mysecret", &headers).is_ok());
+    }
+
+    #[test]
+    fn authorize_cron_rejects_empty_configured_secret() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer x"),
+        );
+        assert!(authorize_cron_request("", &headers).is_err());
     }
 }
