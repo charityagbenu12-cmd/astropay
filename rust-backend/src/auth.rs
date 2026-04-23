@@ -1,3 +1,4 @@
+use axum::http::{HeaderMap, header};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use chrono::{Duration, Utc};
 use deadpool_postgres::GenericClient;
@@ -9,7 +10,11 @@ use scrypt::{
 };
 use uuid::Uuid;
 
-use crate::{config::Config, error::AppError, models::Merchant};
+use crate::{
+    config::Config,
+    error::{AppError, AuthErrorCode},
+    models::Merchant,
+};
 
 pub const SESSION_COOKIE: &str = "astropay_session";
 
@@ -93,6 +98,11 @@ pub fn clear_session_cookie(config: &Config) -> Cookie<'static> {
     cookie
 }
 
+/// Resolves the merchant for a signed session cookie.
+///
+/// The nested `EXISTS` probes `sessions` by **`id` (JWT `sid`)** and `merchant_id` (`sub`). PostgreSQL uses the session **primary key**
+/// for that probe; `expires_at > NOW()` is evaluated on the single fetched row. Bulk expiry deletes are a separate workload and rely on
+/// btree indexes on `expires_at` (see migrations `002_session_expiry_indexes.sql`).
 pub async fn current_merchant<C>(
     client: &C,
     config: &Config,
@@ -131,6 +141,22 @@ where
     Ok(row.map(|row| Merchant::from_row(&row)))
 }
 
+/// Validates `Authorization: Bearer <token>` against the configured cron/webhook secret.
+pub fn authorize_cron_request(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
+    if cron_secret.is_empty() {
+        return Err(AppError::unauthorized_code(AuthErrorCode::CronSecretMismatch));
+    }
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if token == Some(cron_secret) {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized_code(AuthErrorCode::CronSecretMismatch))
+    }
+}
+
 fn session_cookie(config: &Config, token: String) -> Cookie<'static> {
     Cookie::build((SESSION_COOKIE, token))
         .path("/")
@@ -142,9 +168,13 @@ fn session_cookie(config: &Config, token: String) -> Cookie<'static> {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::{HeaderMap, HeaderValue, header};
+
     use super::{
         generate_memo, generate_public_id, hash_password, session_cookie, verify_password,
         wallet_keys_conflict_with_existing,
+        authorize_cron_request, generate_memo, generate_public_id, hash_password, session_cookie,
+        verify_password,
     };
     use crate::config::Config;
 
@@ -232,5 +262,22 @@ mod tests {
             t1.as_str(),
             s2.as_str(),
         ));
+    fn authorize_cron_rejects_wrong_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong"),
+        );
+        assert!(authorize_cron_request("cron_secret", &headers).is_err());
+    }
+
+    #[test]
+    fn authorize_cron_rejects_when_secret_not_configured() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer anything"),
+        );
+        assert!(authorize_cron_request("", &headers).is_err());
     }
 }
