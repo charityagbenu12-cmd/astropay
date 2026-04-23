@@ -5,6 +5,7 @@ mod error;
 mod handlers;
 mod login_rate_limit;
 mod models;
+mod settle;
 mod stellar;
 
 use std::net::SocketAddr;
