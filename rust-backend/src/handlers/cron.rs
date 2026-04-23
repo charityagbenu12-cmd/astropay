@@ -1,6 +1,8 @@
 use axum::{Json, extract::State, http::HeaderMap};
 use chrono::Utc;
 use serde_json::{Value, json};
+use tokio_postgres::types::Json as PgJson;
+use tracing::warn;
 
 use crate::{
     AppState,
@@ -111,10 +113,22 @@ pub async fn reconcile(
         }
     }
 
-    Ok(Json(json!({
+    let body = json!({
         "scanned": results.len(),
         "results": results
-    })))
+    });
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO cron_runs (job_type, started_at, finished_at, success, metadata, error_detail)
+             VALUES ('reconcile', NOW(), NOW(), true, $1, NULL)",
+            &[&PgJson(&body)],
+        )
+        .await
+    {
+        warn!(error = %e, "cron_runs audit insert failed for reconcile");
+    }
+
+    Ok(Json(body))
 }
 
 pub async fn settle(
@@ -122,9 +136,19 @@ pub async fn settle(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     authorize_cron(&state, &headers)?;
-    Err(AppError::not_implemented(
-        "Rust settlement execution is not implemented yet. Port the Stellar transaction signing/submission path before claiming payout parity.",
-    ))
+    let msg = "Rust settlement execution is not implemented yet. Port the Stellar transaction signing/submission path before claiming payout parity.";
+    let client = state.pool.get().await?;
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO cron_runs (job_type, started_at, finished_at, success, metadata, error_detail)
+             VALUES ('settle', NOW(), NOW(), false, '{}'::jsonb, $1)",
+            &[&msg],
+        )
+        .await
+    {
+        warn!(error = %e, "cron_runs audit insert failed for settle");
+    }
+    Err(AppError::not_implemented(msg))
 }
 
 fn authorize_cron_secret(cron_secret: &str, headers: &HeaderMap) -> Result<(), AppError> {
